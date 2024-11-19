@@ -1,7 +1,6 @@
 const puppeteer = require('puppeteer');
 const { Kafka, logLevel, Partitioners } = require('kafkajs');
 
-// Configuración de Kafka
 const kafka = new Kafka({
   clientId: 'waze-scraper',
   brokers: ['localhost:9092'],
@@ -13,16 +12,13 @@ const producer = kafka.producer({
 
 (async () => {
   try {
-    // Conectar el productor de Kafka
     await producer.connect();
 
-    // Configurar Puppeteer y abrir navegador
     const browser = await puppeteer.launch({
       headless: false,
       args: ['--no-sandbox', '--disable-setuid-sandbox']
     });
 
-    // Lista de ubicaciones a scrapear (nombre y URL de cada ubicación)
     const locations = [
       { name: 'Santiago, Chile', url: 'https://www.waze.com/en/live-map/directions?latlng=-33.43785195054054%2C-70.6203317642212' },
       { name: 'Tokio, Japón', url: 'https://www.waze.com/en/live-map/directions?latlng=35.676755415954865%2C139.76290047168735' },
@@ -32,13 +28,11 @@ const producer = kafka.producer({
       { name: 'Guadalajara, México', url: 'https://www.waze.com/en/live-map/directions?latlng=20.643477185724606%2C-103.37957739830017' }
     ];
 
-    // Iterar sobre cada ubicación
     for (const location of locations) {
       console.log(`Accediendo a ${location.name}`);
       const page = await browser.newPage();
       await page.goto(location.url, { waitUntil: 'networkidle2' });
 
-      // Espera a que aparezca el botón "Entendido" y haz clic en él si está presente
       try {
         await page.waitForSelector('button.waze-tour-tooltip__acknowledge', { timeout: 5000 });
         await page.click('button.waze-tour-tooltip__acknowledge');
@@ -47,10 +41,8 @@ const producer = kafka.producer({
         console.log("Botón 'Entendido' no encontrado o ya fue clickeado.");
       }
 
-      // Pausa para asegurar que el mapa cargue correctamente
       await new Promise(resolve => setTimeout(resolve, 5000));
 
-      // Realizar zoom en cada ubicación
       const zoomOutButton = await page.$('a.leaflet-control-zoom-out');
       if (zoomOutButton) {
         for (let i = 0; i < 3; i++) {
@@ -62,7 +54,6 @@ const producer = kafka.producer({
         console.log("Botón de 'Alejar' no encontrado.");
       }
 
-      // Escuchar respuestas de red y enviar alertas a Kafka
       const onResponse = async (response) => {
         const url = response.url();
         if (url.includes('alerts')) {
@@ -85,13 +76,11 @@ const producer = kafka.producer({
       
       page.on('response', onResponse);
 
-      // Pausa antes de cerrar la página y pasar a la siguiente ubicación
       await new Promise(resolve => setTimeout(resolve, 10000));
-      page.off('response', onResponse);  // Desactivar el listener después de cada iteración
-      await page.close();  // Cerrar la página antes de pasar a la siguiente ubicación
+      page.off('response', onResponse); 
+      await page.close(); 
     }
 
-    // Cerrar productor de Kafka y navegador
     await producer.disconnect();
     await browser.close();
   } catch (error) {
