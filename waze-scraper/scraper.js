@@ -15,9 +15,10 @@ const producer = kafka.producer({
     await producer.connect();
 
     const browser = await puppeteer.launch({
-      headless: false,
+      headless: true, // Cambiar a true para evitar problemas gráficos
       args: ['--no-sandbox', '--disable-setuid-sandbox']
     });
+    
 
     const locations = [
       { name: 'Santiago, Chile', url: 'https://www.waze.com/en/live-map/directions?latlng=-33.43785195054054%2C-70.6203317642212' },
@@ -60,12 +61,20 @@ const producer = kafka.producer({
           try {
             const data = await response.json();
             if (data.alerts) {
+              const startTime = Date.now(); // Inicio de medición de latencia
               for (const alert of data.alerts) {
+                const enrichedAlert = {
+                  ...alert,
+                  generated_at: new Date().toISOString(), // Timestamp del envío
+                };
+
                 await producer.send({
                   topic: 'waze-alerts',
-                  messages: [{ value: JSON.stringify(alert) }]
+                  messages: [{ value: JSON.stringify(enrichedAlert) }]
                 });
-                console.log(`Enviado a Kafka desde ${location.name}: ${alert.type} en ${alert.city}`);
+                const endTime = Date.now(); // Fin de medición de latencia
+                const latency = endTime - startTime;
+                console.log(`Enviado a Kafka desde ${location.name}: ${alert.type} en ${alert.city}. Latencia: ${latency} ms`);
               }
             }
           } catch (error) {
@@ -73,7 +82,7 @@ const producer = kafka.producer({
           }
         }
       };
-      
+
       page.on('response', onResponse);
 
       await new Promise(resolve => setTimeout(resolve, 10000));

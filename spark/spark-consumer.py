@@ -1,6 +1,6 @@
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import from_json, col
-from pyspark.sql.types import StructType, StringType, IntegerType
+from pyspark.sql.functions import from_json, col, current_timestamp, unix_timestamp, expr
+from pyspark.sql.types import StructType, StringType, IntegerType, TimestampType
 from cassandra.cluster import Cluster
 import requests
 import json
@@ -20,6 +20,9 @@ def create_keyspace_and_table():
             street TEXT,
             confidence INT,
             reliability INT,
+            generated_at TIMESTAMP,
+            processed_at TIMESTAMP,
+            latency_ms BIGINT,
             PRIMARY KEY (country, city, type)
         )
     """)
@@ -42,14 +45,17 @@ spark = SparkSession \
 kafka_brokers = "localhost:9092"
 topic_name = "waze-alerts"
 
+# Actualización del esquema para incluir `generated_at`
 alert_schema = StructType() \
     .add("country", StringType()) \
     .add("city", StringType()) \
     .add("type", StringType()) \
     .add("street", StringType()) \
     .add("confidence", IntegerType()) \
-    .add("reliability", IntegerType())
+    .add("reliability", IntegerType()) \
+    .add("generated_at", TimestampType())  # Timestamp de creación
 
+# Crear índice en Elasticsearch para incluir latencia
 def create_elasticsearch_index():
     url = "http://localhost:9200/waze"
     headers = {"Content-Type": "application/json"}
@@ -61,7 +67,10 @@ def create_elasticsearch_index():
                 "type": {"type": "keyword"},
                 "street": {"type": "text"},
                 "confidence": {"type": "integer"},
-                "reliability": {"type": "integer"}
+                "reliability": {"type": "integer"},
+                "generated_at": {"type": "date"},
+                "processed_at": {"type": "date"},
+                "latency_ms": {"type": "long"}
             }
         }
     }
@@ -87,6 +96,7 @@ kafka_df = spark \
     .option("failOnDataLoss", "false") \
     .load()
 
+# Procesar los datos y calcular la latencia
 alert_df = kafka_df.selectExpr("CAST(value AS STRING)") \
     .select(from_json(col("value"), alert_schema).alias("data")) \
     .select("data.*") \
@@ -95,8 +105,12 @@ alert_df = kafka_df.selectExpr("CAST(value AS STRING)") \
             col("type").isNotNull() & 
             col("street").isNotNull() & 
             col("confidence").isNotNull() & 
-            col("reliability").isNotNull())
+            col("reliability").isNotNull()) \
+    .withColumn("processed_at", current_timestamp()) \
+    .withColumn("latency_ms", 
+                (unix_timestamp(col("processed_at")) - unix_timestamp(col("generated_at"))) * 1000)
 
+# Escribir los datos en Cassandra
 def write_to_cassandra(df, epoch_id):
     df.write \
         .format("org.apache.spark.sql.cassandra") \
@@ -109,6 +123,7 @@ alert_df.writeStream \
     .outputMode("append") \
     .start()
 
+# Opciones para Elasticsearch
 es_options = {
     "es.nodes": "localhost",
     "es.port": "9200",
@@ -116,6 +131,7 @@ es_options = {
     "es.nodes.wan.only": "true"
 }
 
+# Escribir los datos en Elasticsearch
 def write_to_elasticsearch(df, epoch_id):
     print("Datos a enviar a Elasticsearch:")
     df.show() 
@@ -130,6 +146,7 @@ alert_df.writeStream \
     .outputMode("append") \
     .start()
 
+# Imprimir datos procesados en consola
 query_console = alert_df \
     .writeStream \
     .outputMode("append") \
